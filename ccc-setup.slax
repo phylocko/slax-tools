@@ -1,0 +1,178 @@
+version 1.0;
+
+ns junos = "http://xml.juniper.net/junos/*/junos";
+ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
+ns jcs = "http://xml.juniper.net/junos/commit-scripts/1.0";
+
+import "../import/junos.xsl";
+
+param $vlan-id;
+param $interface;
+param $remote-address;
+param $description;
+
+var $arguments = {
+  <argument> {
+    <name> "vlan-id";
+    <description> "Vlan ID and Virtual Circuit ID";
+  }
+  <argument> {
+    <name> "description";
+    <description> "Client name or description";
+  }
+  <argument> {
+    <name> "remote-address";
+    <description> "Neighbor's loopback IP-address";
+  }
+  <argument> {
+    <name> "interface";
+    <description> "Parent interface (ae0, xe-0/0/2, etc..)";
+  }
+}
+
+/* Getting interface list */
+var $interface_query = <get-interface-information> { 
+	<interface-name> $interface;
+}
+
+
+template config($candidate_description, $interface, $vlan-id, $ipaddress) {
+    <configuration> {
+        <interfaces> {
+            <interface> {
+	        <name> $interface;
+                <unit> {
+	            <name> $vlan-id;
+	            <vlan-id> $vlan-id;
+	            <description> $candidate_description;
+	            <encapsulation> "vlan-ccc";
+	            <family> {
+	                <ccc>;
+	            }
+                }
+            }
+        }
+	<protocols> {
+		<l2circuit> {
+			<neighbor> {
+				<name> $ipaddress;
+				<interface> {
+					<name> $interface _ "." _ $vlan-id;
+					<virtual-circuit-id> $vlan-id;
+					<description> $description _ "_ccc";
+					<no-control-word>;
+					<mtu> 1500;
+				}
+			}
+		}
+	}
+    }
+}
+
+var $opts := {
+    <commit-options> {
+        <log> "Setting up the " _ $interface _ "." _ $vlan-id _ " as " _ $description;
+    }
+}
+
+match / {
+	<op-script-results> {
+
+	/* Check the IP address */
+	if(jcs:empty($remote-address))
+	{
+		<xsl:message terminate="yes"> " No IP-address given. ";
+	}
+ 
+	var $ipaddress = jcs:parse-ip($remote-address);
+
+	if(jcs:empty($ipaddress[1]))
+	{
+		<xsl:message terminate="yes"> " Wrong IP address given";
+	}
+
+
+	/* Check the description */
+	if(jcs:empty($description))
+	{
+		<xsl:message terminate="yes"> " No description given. ";
+	}
+	
+	if(jcs:regex("ccc", $description))
+	{
+		<xsl:message terminate="yes"> " Wrong description. Don't add 'ccc'. ";
+	}
+	var $candidate_description = $description _ "_ccc";
+
+
+	/* Checking interface name */
+	if(jcs:regex("[.]", $interface))
+	{
+		<xsl:message terminate="yes"> " Wrong interface name given (don't specify suninterfaces)";
+	}
+
+	var $conn_handle = jcs:open();
+
+	var $candidate_interface = jcs:execute($conn_handle, $interface_query);
+
+	if(jcs:empty($candidate_interface/physical-interface))
+	{
+		<xsl:message terminate="yes"> " Interface " _ $interface _ " appears to be missing.";
+	}
+	expr jcs:progress(" -> physical-interface check passed");
+
+	/* Check the vlan-id */
+	if(jcs:empty($vlan-id))
+	{       
+		<xsl:message terminate="yes"> " No vlan-id given. ";
+	}
+	expr jcs:progress(" -> user input of vlan-id exists");
+
+
+	if(jcs:regex("(^[0-9]+$)", $vlan-id)) { } else {
+		<xsl:message terminate="yes"> " Wrong vlan-id given";
+	}
+	expr jcs:progress(" -> vlan-is is a number");
+
+	if($vlan-id > 4094 || $vlan-id < 2) {
+		<xsl:message terminate="yes"> " Wrong vlan-id given, use range [2-4094]";
+	}
+	expr jcs:progress(" -> vlan-id is in valid range");
+
+	var $subinterface_name = $interface _ "." _ $vlan-id;
+
+	if(jcs:empty($candidate_interface/physical-interface/logical-interface[name == $subinterface_name])) {} else
+	{
+		<xsl:message terminate="yes"> " Subinterface " _ $subinterface_name _ " already exists! (" _ $candidate_interface/physical-interface/logical-interface[name == $subinterface_name]/description _ ")";
+	}
+	expr jcs:progress(" -> logical-interface check passed");
+
+	var $confirmation = "Confirm that you want to apply the configuration:\n\tInterface:   " _ $subinterface_name _ "\n\tNeighbor:    " _ $ipaddress _ "\n\tDescription: " _ $candidate_description;
+	
+	expr jcs:output($confirmation);
+	expr jcs:output("");
+
+	var $confirm = jcs:get-input("Apply? (y/n) ");
+
+	if($confirm == "y")
+	{
+		expr jcs:output("Applying the configuration...");
+	}
+	else
+	{
+		expr jcs:output("You have cancelled the configuration.");
+	}
+
+	var $candidate_config = { call config($candidate_description, $interface, $vlan-id, $ipaddress); }
+
+        var $results := {call jcs:load-configuration($commit-options=$opts, 
+					$configuration=$candidate_config, 
+					$connection=$conn_handle,
+					$action="merge");
+	}
+
+	var $close-results = jcs:close($conn_handle);
+
+	<output> "OUT: " _ $results;
+    }
+}
