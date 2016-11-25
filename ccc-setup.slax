@@ -76,7 +76,7 @@ template config($candidate_description, $interface, $vlan-id, $ipaddress) {
 
 var $opts := {
     <commit-options> {
-        <log> "Setting up the " _ $interface _ "." _ $vlan-id _ " as " _ $description;
+        <log> "Setting up ccc-interface " _ $interface _ "." _ $vlan-id _ " with " _$remote-address _ " for " _ $description;
     }
 }
 
@@ -152,7 +152,7 @@ match / {
 	}
 	expr jcs:progress(" -> logical-interface check passed");
 
-	var $confirmation = "Confirm that you want to apply the configuration:\n\tInterface:   " _ $subinterface_name _ "\n\tNeighbor:    " _ $ipaddress _ "\n\tDescription: " _ $candidate_description;
+	var $confirmation = "Confirm that you want to apply the configuration:\n\tInterface:   " _ $subinterface_name _ "\n\tNeighbor:    " _ $ipaddress[1] _ "\n\tDescription: " _ $candidate_description;
 	
 	expr jcs:output($confirmation);
 	expr jcs:output("");
@@ -168,7 +168,7 @@ match / {
 		<xsl:message terminate="yes">"You have cancelled the configuration.";
 	}
 
-	var $candidate_config = { call config($candidate_description, $interface, $vlan-id, $ipaddress); }
+	var $candidate_config = { call config($candidate_description, $interface, $vlan-id, $ipaddress=$ipaddress[1]); }
 
         var $results := {call jcs:load-configuration($commit-options=$opts, 
 					$configuration=$candidate_config, 
