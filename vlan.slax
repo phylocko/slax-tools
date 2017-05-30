@@ -11,16 +11,10 @@ ns jcs = "http://xml.juniper.net/junos/commit-scripts/1.0";
 
 import "../import/junos.xsl";
 
-param $client;
 param $interface;
 param $vlan;
 
 var $arguments = {
-    <argument> {
-      <name> "client";
-      <description> "Clientname";
-    }
-
     <argument> {
       <name> "interface";
       <description> "Client's interface (ae0, xe-0/0/8, etc. No subs.)";
@@ -116,7 +110,7 @@ match / {
       }
       expr jcs:progress(" -> physical-interface nas no any family configured on unit 0");
 
-    	var $confirmation = "Confirm that you want to apply the configuration:\n\tInterface:\t" _ $interface _ "\n\tVlan:\t\t" _ $vlan _ "\n\tClientname:\t" _ $client;
+    	var $confirmation = "Confirm that you want to apply the configuration:\n\tInterface:\t" _ $interface _ "\n\tVlan:\t\t" _ $vlan;
     	expr jcs:output($confirmation);
     	expr jcs:output("");
     	var $confirm = jcs:get-input("Apply? (y/n) ");

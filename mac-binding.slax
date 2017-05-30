@@ -1,0 +1,231 @@
+version 1.0;
+
+/*
+ Created by Vladislav Pavkin. Nov 2016.
+ vladislav.pavkin@gmail.com
+*/
+
+ns junos = "http://xml.juniper.net/junos/*/junos";
+ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
+ns jcs = "http://xml.juniper.net/junos/commit-scripts/1.0";
+
+import "../import/junos.xsl";
+
+param $client;
+param $mac-address;
+param $interface;
+
+var $arguments = {
+    <argument> {
+      <name> "client";
+      <description> "Clientname";
+    }
+    <argument> {
+      <name> "mac-address";
+      <description> "MAC-Address";
+    }
+    <argument> {
+      <name> "interface";
+      <description> "Client's interface (ae0, xe-0/0/8, etc. No subs.)";
+    }
+}
+
+/* Getting a real interface */
+var $interface_query = <get-interface-information> {
+	 <interface-name> $interface;
+}
+
+
+/* Configuration template */
+
+template config($client, $mac-address, $interface) {
+    <configuration> {
+            <interfaces> {
+                <interface> {
+                    <name> $interface ;
+                    <unit> {
+                        <name>0;
+                        <family> {
+                            <ethernet-switching> {
+                                <filter> {
+                                    <input> $client _ "_binding" ;
+                                    <output> "BPDU_FILTER" ;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            <firewall> {
+                <family> {
+                    <ethernet-switching> {
+                        <filter> {
+                            <name> $client _ "_binding" ;
+                            <term> {
+                                <name> "discard-bpdu" ;
+                                <from> {
+                                    <destination-mac-address> {
+                                        <name> "01:80:c2:00:00:00" ;
+                                    }
+                                    <destination-mac-address> {
+                                        <name> "01:00:0c:cc:cc:cd";
+                                    }
+                                    <destination-mac-address> {
+                                        <name> "01:80:c2:00:00:08" ;
+                                    }
+                                    <destination-mac-address> {
+                                        <name> "01:00:0c:cc:cc:cc" ;
+                                    }
+                                }
+                                <then> {
+                                    <discard>;
+                                }
+                            }
+                            <term> {
+                                <name> "arp_permit" ;
+                                <from> {
+                                    <source-mac-address> {
+                                        <name> $mac-address ;
+                                    }
+                                    <ether-type> "arp" ;
+                                }
+                                <then> {
+                                    <accept>;
+                                }
+                            }
+                            <term> {
+                                <name> "deny_bcast" ;
+                                <from> {
+                                    <destination-mac-address> {
+                                        <name> "ff:ff:ff:ff:ff:ff" ;
+                                    }
+                                }
+                                <then> {
+                                    <discard>;
+                                }
+                            }
+                            <term> {
+                                <name> "allowed_macs" ;
+                                <from> {
+                                    <source-mac-address> {
+                                        <name> $mac-address ;
+                                    }
+                                }
+                                <then> {
+                                    <accept>;
+                                }
+                            }
+                            <term> {
+                                <name> "default";
+                                <then> {
+                                    <discard>;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+    }
+}
+
+
+var $opts := {
+    <commit-options> {
+        <log> "Binding " _ $mac-address _ " for client " _ $client;
+    }
+}
+
+
+match / {
+	<op-script-results> {
+
+      /* Validating given mac-address */
+      if(jcs:regex("^([0-9]|[a-f]){2}:([0-9]|[a-f]){2}:([0-9]|[a-f]){2}:([0-9]|[a-f]){2}:([0-9]|[a-f]){2}:([0-9]|[a-f]){2}$", $mac-address))
+    	{} else
+      {
+    		  <xsl:message terminate="yes"> " Wrong MAC-address given (should have 11:22:33:aa:bb:cc format)";
+    	}
+
+      /* Checking interface name */
+    	if(jcs:regex("[.]", $interface))
+    	{
+    		<xsl:message terminate="yes"> " Wrong interface name given (don't specify subinterface)";
+    	}
+
+      /* Opening connection for checking physical interface existance */
+    	var $conn_handle = jcs:open();
+
+      /* Getting an interface */
+      var $candidate_interface = jcs:execute($conn_handle, $interface_query);
+
+
+    	if(jcs:empty($candidate_interface/physical-interface))
+    	{
+    		<xsl:message terminate="yes"> " Interface " _ $interface _ " appears to be missing.";
+    	}
+    	expr jcs:progress(" -> physical-interface check passed");
+
+
+      /* Check if we have subint unit != 0, that is impossible on eth-switch ifaces */
+      var $proper_name = $interface _ ".0";
+      for-each($candidate_interface/physical-interface/logical-interface/name)
+      {
+          var $subint_name = .;
+          if($proper_name == $subint_name ) { } else
+          {
+              <xsl:message terminate="yes"> "Interface " _ $interface _ " has non eth-switch family configured on " _ $subint_name;
+          }
+      }
+      expr jcs:progress(" -> physical-interface nas no non-0 units configured");
+
+      /* Check if we have no eth-switch configured on the interface */
+      if(jcs:empty($candidate_interface/physical-interface/logical-interface/address-family/address-family-name))
+      {
+          if($candidate_interface/physical-interface/logical-interface/address-family/address-family-name == "eth-switch")
+          {} else
+          {
+              <xsl:message terminate="yes"> "Interface " _ $interface _ " have no eth-switch family configured on unit 0";
+          }
+      }
+      expr jcs:progress(" -> physical-interface has the eth-switch configured");
+
+    	var $confirmation = "Confirm that you want to apply the configuration:\n\tInterface:\t" _ $interface _ "\n\tClient:\t\t" _ $client _ "\n\tmac-address:\t" _ $mac-address;
+    	expr jcs:output($confirmation);
+    	expr jcs:output("");
+    	var $confirm = jcs:get-input("Apply? (y/n) ");
+      if($confirm == "y")
+      {
+      	 expr jcs:output("Applying the configuration...");
+      }
+      else
+      {
+      	 <xsl:message terminate="yes">"You have cancelled the configuration.";
+      }
+
+      var $candidate_config = { call config($client, $mac-address, $interface); }
+
+      expr jcs:progress(" -> Config is ready");
+
+      var $results := {
+          call jcs:load-configuration($commit-options=$opts,
+          $configuration=$candidate_config,
+          $connection=$conn_handle,
+          $action="merge");
+      }
+
+      expr jcs:progress(" -> Load conf called");
+
+      var $close-results = jcs:close($conn_handle);
+
+      if(jcs:empty($results//xnm:error))
+      {
+          expr jcs:output("Done!");
+      }
+      else
+      {
+          var $error = "Error: " _ $results//xnm:error/message;
+          expr jcs:output($error);
+      }
+
+  }
+}
