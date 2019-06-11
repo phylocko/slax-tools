@@ -1,0 +1,115 @@
+version 1.0;
+
+ns junos = "http://xml.juniper.net/junos/*/junos";
+ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
+ns jcs = "http://xml.juniper.net/junos/commit-scripts/1.0";
+
+
+import "../import/junos.xsl";
+
+var $arguments = {
+    <argument> {
+        <name> "vlan-name";
+        <description> "Vlan name";
+    }
+}
+
+param $vlan-name;
+
+
+template vlan($vlan-name) {
+            <vlan delete="delete"> {
+                <name> $vlan-name;
+            }
+copy-of ./vlan;
+}
+
+template vlan_mem($vlan-name, $interface) {
+            <interface> {
+                <name> $interface; 
+                <unit> {
+                    <name> 0;
+                    <family> {
+                        <ethernet-switching> {
+                            <vlan> {
+                                <members delete="delete"> $vlan-name;
+                            }
+                        }
+                    }
+                }
+            }
+copy-of ./interface;
+}
+
+match / {
+    <op-script-results> {
+        var $get-interfaces = <get-configuration> {
+            <configuration> {
+                <interfaces>;
+            }
+        }
+	var $get-vlans = <get-vlan-information> {
+            <vlan-name> $vlan-name;
+        }
+        
+        var $config-interfaces = jcs:invoke($get-interfaces);
+        var $config-vlans = jcs:invoke($get-vlans);
+
+        if(jcs:empty($config-vlans/vlan)) {
+            <xsl:message terminate="yes"> "There is no vlan " _ $vlan-name;
+        }
+
+        var $configuration := {
+            <configuration> {
+                <interfaces> {
+                    for-each ( $config-interfaces/interfaces/interface/unit/family/ethernet-switching/vlan ) {
+                        var $interface = ../../../../name;
+                        var $member = members;
+                        if ( $member == $vlan-name ) {
+                            call vlan_mem( $vlan-name, $interface );
+                        }
+                    }
+                }
+                <vlans> {
+                    call vlan($vlan-name);
+                }
+            }
+        }
+        
+        expr jcs:output("Vlan " _ $vlan-name _ " will be deleted from interfaces:");
+        for-each ( $configuration/configuration/interfaces/interface ) {
+            var $name = name;
+            expr jcs:output($name);
+        }
+       
+        expr jcs:output("");
+
+        var $confirm = jcs:get-input("Apply? (y/n) ");
+
+        if($confirm == "y"){
+            expr jcs:output("Applying the configuration...");
+        } else {
+            <xsl:message terminate="yes">"You have cancelled the configuration.";                                                                               
+        }
+
+ 
+        var $connection = jcs:open();
+        
+        var $commit-options = {
+            <commit-options> {
+                <check>;
+            }
+        }
+
+        var $result := {
+            call jcs:load-configuration( $connection, $configuration ); 
+        } 
+
+        if( $result//self::xnm:error ) {
+            copy-of $result;
+        } else {
+            copy-of $result//self::xnm:warning;
+            expr jcs:output( "Done");
+        }
+    }
+}
